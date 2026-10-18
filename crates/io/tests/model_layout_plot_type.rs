@@ -66,3 +66,90 @@ fn model_layout_plot_type_survives_the_dwg_bridge() {
     assert_eq!(model.1, Some(1), "{p:?}");
     assert_ne!(p.iter().find(|(n, _, _)| !n.eq_ignore_ascii_case("Model")).and_then(|l| l.1), None);
 }
+
+/// Model space's page setup as PAGESETUP or the Plot dialog's Apply to Layout keeps it.
+fn model_page() -> PageSetup {
+    PageSetup {
+        device: "DWG To PDF.pc3".into(),
+        paper: "ISO A3 (297.00 x 420.00 MM)".into(),
+        width_mm: 297.0,
+        height_mm: 420.0,
+        margins_mm: [5.0, 6.0, 7.0, 8.0],
+        landscape: false,
+        plot_area: "display".into(),
+        scale_to_fit: false,
+        scale: 0.02,
+        plot_style_table: "monochrome.ctb".into(),
+        center: false,
+        lineweights: false,
+        show_plot_styles: true,
+        plot_transparency: false,
+    }
+}
+
+#[test]
+fn model_page_setup_round_trips() {
+    let mut d = drawing();
+    d.model_page = Some(model_page());
+    let text = cadcraft_io::write_dxf(&d);
+    let model = plots(&text).into_iter().find(|(n, _, _)| n == "Model").unwrap();
+    assert_eq!((model.1, model.2), (Some(0), Some(16)), "display, custom scale");
+    let back = cadcraft_io::read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(back.model_page, Some(model_page()));
+    assert!(back.layouts.iter().all(|l| l.page == PageSetup::default()), "layouts keep their own");
+    // Limits too; a window has no corners to keep, so it plots the extents.
+    for (area, read) in [("limits", "limits"), ("window", "extents"), ("layout", "extents")] {
+        d.model_page = Some(PageSetup { plot_area: area.into(), ..model_page() });
+        let back = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap();
+        assert_eq!(back.model_page.map(|p| p.plot_area), Some(read.to_string()), "{area}");
+    }
+}
+
+/// `text` with group `code` of its first LAYOUT record (Model's) set to `value`.
+fn set_in_model_layout(text: &str, code: &str, value: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut inside = false;
+    let mut i = 0;
+    while i + 1 < lines.len() {
+        let (c, v) = (lines[i].trim().to_string(), lines[i + 1].trim().to_string());
+        if c == "0" {
+            if inside {
+                break;
+            }
+            inside = v == "LAYOUT";
+        } else if inside && c == code {
+            lines[i + 1] = value.to_string();
+        }
+        i += 2;
+    }
+    lines.join("\n")
+}
+
+#[test]
+fn a_drawing_without_a_model_page_setup_reads_back_without_one() {
+    let text = cadcraft_io::write_dxf(&drawing());
+    assert_eq!(plots(&text).first().map(|p| p.0.as_str()), Some("Model"), "Model's LAYOUT comes first");
+    assert_eq!(cadcraft_io::read_dxf(text.as_bytes()).unwrap().model_page, None);
+    // What older versions wrote for Model (the default page, plot type 5 at 1:1) reads the same.
+    let older = set_in_model_layout(&set_in_model_layout(&text, "74", "5"), "75", "16");
+    assert_eq!(plots(&older).first().map(|p| (p.1, p.2)), Some((Some(5), Some(16))));
+    assert_eq!(cadcraft_io::read_dxf(older.as_bytes()).unwrap().model_page, None);
+    // So does a file without LAYOUT objects.
+    let bare = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n";
+    assert_eq!(cadcraft_io::read_dxf(bare.as_bytes()).unwrap().model_page, None);
+    // Another program's Model plot settings are kept, hostile numbers replaced.
+    let other = set_in_model_layout(&set_in_model_layout(&text, "44", "nan"), "142", "-3");
+    let page = cadcraft_io::read_dxf(set_in_model_layout(&other, "74", "0").as_bytes()).unwrap().model_page.unwrap();
+    assert_eq!((page.plot_area.as_str(), page.width_mm, page.scale), ("display", PageSetup::default().width_mm, 1.0));
+}
+
+#[test]
+fn model_page_setup_survives_the_dwg_bridge() {
+    let mut d = drawing();
+    d.model_page = Some(model_page());
+    let back = cadcraft_io::read(&cadcraft_io::write(&d, "x.dwg").unwrap(), "x.dwg").unwrap();
+    assert_eq!(back.model_page, Some(model_page()));
+    // Without one, none comes back.
+    let back = cadcraft_io::read(&cadcraft_io::write(&drawing(), "x.dwg").unwrap(), "x.dwg").unwrap();
+    assert_eq!(back.model_page, None);
+}
