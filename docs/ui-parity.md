@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (animation effects follow the operating system's setting) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (AltGr types at the command line) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADCraft's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
@@ -189,6 +189,10 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
   shortcuts. AutoCAD for Mac's defaults are similar in number; F4 (3D osnap) and F6 (dynamic UCS)
   are missing.
 - Delete erases the selection on macOS (#64); Escape cancels.
+- AltGr types at the command line (#1551): `@`, `{`, `[`, `$` and `€` reach it on Norwegian,
+  German, Polish and similar layouts, on the desktop and in the browser. Ctrl+Alt never runs a Ctrl
+  shortcut, because Windows reports AltGr that way. In the browser, AltGr alone no longer types its
+  name (`AltGraph`).
 - Right-click on the canvas is Enter while a command runs; holding it (250 ms, AutoCAD's
   time-sensitive right-click) opens the command menu: Enter, Cancel, Recent Input, the prompt's
   options, Snap Overrides, Pan/Zoom. Otherwise it opens a shortcut menu (Repeat, Recent Commands,
@@ -202,6 +206,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | AltGr types `@`, `{`, `[`, `$` and `€` at the command line (#1551): the browser build no longer types `AltGraph` or drops AltGr characters on Windows; Ctrl+Alt never runs a Ctrl shortcut |
 | 2026-10-12 | minor | Selected and hovered objects redrawn in the selection colour (text and arrowheads included); Options ▸ Selection laid out as AutoCAD's: Object grouping, Show grips, grip object limit, selection preview, Visual Effect Settings (selection area, preview filter) |
 | 2026-10-12 | minor | Animation effects (dialog and menu fades, smoothed wheel scrolling and ⌘/Ctrl+wheel zoom) follow the operating system's setting; View ▸ Accessibility ▸ Animation Effects chooses System, On or Off |
 | 2026-10-12 | minor | Hatch and Gradient / Hatch Edit dialogs (HATCH, GRADIENT, HATCHEDIT, double-click a hatch; HPDLGMODE) |
