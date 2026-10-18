@@ -4,7 +4,8 @@
 
 use cadcraft_doc::{Common, Entity, EntityKind, Handle, LwPolyline, MAX_BLOCK_DEPTH, Space};
 use cadcraft_geom::{
-    Arc, Ellipse, Line, Mat3, PolyVertex, Polyline, Segment, Spline, TAU, Vec2, ccw_sweep, intersect_ext, line_circle, line_line_infinite, norm_angle,
+    Arc, Circle, Ellipse, Line, Mat3, PolyVertex, Polyline, Segment, Spline, TAU, Vec2, ccw_sweep, intersect_ext, line_circle, line_line_infinite,
+    norm_angle,
 };
 use serde_json::{Value, json};
 
@@ -1704,17 +1705,60 @@ fn trim_for_fillet(k: &EntityKind, pick: Vec2, t: Vec2) -> Option<(Option<Entity
                 // Extend the nearer end.
                 ccw_sweep(g.end, ta) <= ccw_sweep(ta, g.start)
             };
-            if keep_start_side {
-                let na = Arc::new(g.center, g.radius, g.start, ta);
-                Some((Some(arc(&na)), Some(ccw_tan)))
+            let (na, dir) = if keep_start_side {
+                (Arc::new(g.center, g.radius, g.start, ta), ccw_tan)
             } else {
-                let na = Arc::new(g.center, g.radius, ta, g.end);
-                Some((Some(arc(&na)), Some(-ccw_tan)))
+                (Arc::new(g.center, g.radius, ta, g.end), -ccw_tan)
+            };
+            // Nothing left on the kept side: leave the arc alone rather than make a full circle.
+            if na.sweep() > TAU - 1e-9 {
+                return Some((None, None));
             }
+            Some((Some(arc(&na)), Some(dir)))
         }
         EntityKind::Circle(_) => Some((None, None)),
         _ => None,
     }
+}
+
+/// The directions leaving `t1` and `t2` into the shorter arc of `c` between them.
+fn short_arc_dirs(c: &Circle, t1: Vec2, t2: Vec2) -> (Vec2, Vec2) {
+    let ccw1 = (t1 - c.center).perp().normalized();
+    let ccw2 = (t2 - c.center).perp().normalized();
+    if ccw_sweep(c.center.angle_to(t1), c.center.angle_to(t2)) <= std::f64::consts::PI { (ccw1, -ccw2) } else { (-ccw1, ccw2) }
+}
+
+/// FILLET's tangent circle nearest the picks, and a point on the side of each object to keep so
+/// that the short arc runs on smoothly from both.
+fn fillet_circle(k1: &EntityKind, p1: Vec2, o1: TanObj, k2: &EntityKind, p2: Vec2, o2: TanObj, r: f64) -> Option<(Circle, Vec2, Vec2)> {
+    // Skip a circle touching both at one point: its arc would have no length.
+    let cands: Vec<_> = curves::ttr_all(o1, p1, o2, p2, r).into_iter().filter(|c| !o1.touch(c).near(o2.touch(c), 1e-9 * r.max(1.0))).collect();
+    // True when the object, kept on the side of `q`, arrives at `t` along `v`.
+    let runs_on = |k: &EntityKind, q: Vec2, t: Vec2, v: Vec2| trim_for_fillet(k, q, t).is_some_and(|(_, d)| d.is_none_or(|d| d.dot(v) > 0.0));
+    let dirs = |c: &Circle| {
+        let (t1, t2) = (o1.touch(c), o2.touch(c));
+        let (v1, v2) = short_arc_dirs(c, t1, t2);
+        (t1, t2, v1, v2)
+    };
+    for c in &cands {
+        let (t1, t2, v1, v2) = dirs(c);
+        if runs_on(k1, p1, t1, v1) && runs_on(k2, p2, t2, v2) {
+            return Some((*c, p1, p2));
+        }
+    }
+    // No circle suits the picked sides: keep an object's other side where that runs on smoothly.
+    let c = *cands.first()?;
+    let (t1, t2, v1, v2) = dirs(&c);
+    let ends = |k: &EntityKind| match k {
+        EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
+        EntityKind::Arc(a) => {
+            let g = Arc::new(a.center.xy(), a.radius, a.start, a.end);
+            vec![g.start_point(), g.end_point()]
+        }
+        _ => Vec::new(),
+    };
+    let side = |k: &EntityKind, p: Vec2, t: Vec2, v: Vec2| std::iter::once(p).chain(ends(k)).find(|q| runs_on(k, *q, t, v)).unwrap_or(p);
+    Some((c, side(k1, p1, t1, v1), side(k2, p2, t2, v2)))
 }
 
 /// Fillet two curves (lines, arcs, circles; elliptical arcs and splines in `curve_edits`) with
@@ -1735,7 +1779,10 @@ pub(crate) fn fillet_curves(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p
     if h1 == h2 {
         return Err(other("Cannot fillet an object to itself."));
     }
-    let (t1, t2, fc) = if r <= 1e-12 {
+    if !(r.is_finite() && r >= 0.0) {
+        return Err(other("The fillet radius must be zero or more."));
+    }
+    let (t1, t2, fc, q1, q2) = if r <= 1e-12 {
         // Sharp corner: the intersection nearest the picks.
         let hits: Vec<Vec2> = match (o1, o2) {
             (TanObj::Line(a), TanObj::Line(b)) => line_line_infinite(a.a, a.b, b.a, b.b).map(|x| vec![x.0]).unwrap_or_default(),
@@ -1746,13 +1793,13 @@ pub(crate) fn fillet_curves(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p
             .into_iter()
             .min_by(|a, b| (a.dist(p1) + a.dist(p2)).total_cmp(&(b.dist(p1) + b.dist(p2))))
             .ok_or_else(|| other("The objects do not intersect."))?;
-        (x, x, None)
+        (x, x, None, p1, p2)
     } else {
-        let c = curves::ttr(o1, p1, o2, p2, r).ok_or_else(|| other("Radius is too large."))?;
-        (o1.touch(&c), o2.touch(&c), Some(c))
+        let (c, q1, q2) = fillet_circle(&e1.kind, p1, o1, &e2.kind, p2, o2, r).ok_or_else(|| other("Radius is too large."))?;
+        (o1.touch(&c), o2.touch(&c), Some(c), q1, q2)
     };
-    let (n1, d1) = trim_for_fillet(&e1.kind, p1, t1).ok_or_else(unsupported)?;
-    let (n2, d2) = trim_for_fillet(&e2.kind, p2, t2).ok_or_else(unsupported)?;
+    let (n1, d1) = trim_for_fillet(&e1.kind, q1, t1).ok_or_else(unsupported)?;
+    let (n2, d2) = trim_for_fillet(&e2.kind, q2, t2).ok_or_else(unsupported)?;
     let new_arc = fc.map(|c| {
         let a1 = c.center.angle_to(t1);
         let a2 = c.center.angle_to(t2);
