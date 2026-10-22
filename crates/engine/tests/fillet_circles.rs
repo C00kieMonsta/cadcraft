@@ -224,6 +224,32 @@ fn fillet_circle_degenerate_radii_and_positions() {
     assert_eq!(model(&s), before);
 }
 
+/// A line with neither endpoint on a usable side cannot make a short, smooth fillet.
+#[test]
+fn fillet_refuses_a_short_line_that_cannot_meet_the_short_arc() {
+    for (radius, points, cp, lp, fillet_radius) in [
+        (50, [[100, -10], [100, 10]], [30, 40], [100, 0], 30),
+        // The picked endpoint is already a tangent point. Its arrival direction still matters.
+        (5, [[11, 8], [11, 0]], [3, 4], [11, 8], 5),
+    ] {
+        for circle_first in [true, false] {
+            let mut s = Session::new();
+            let c = h(&s.execute("circle", &json!({"center": [0, 0], "radius": radius})).unwrap());
+            let l = h(&s.execute("line", &json!({"points": points})).unwrap());
+            let before = model(&s);
+            let params = if circle_first {
+                json!({"h1": c, "p1": cp, "h2": l, "p2": lp, "radius": fillet_radius})
+            } else {
+                json!({"h1": l, "p1": lp, "h2": c, "p2": cp, "radius": fillet_radius})
+            };
+            // Both endpoints lie between the possible tangent points. Extending either end
+            // would require a fillet over 180 degrees or a cusp at the line.
+            assert!(s.execute("fillet", &params).is_err());
+            assert_eq!(model(&s), before);
+        }
+    }
+}
+
 /// Fillets with arcs and circles picked between the two possible tangent points: never a loop.
 #[test]
 fn fillet_arcs_and_circles_run_on_smoothly() {

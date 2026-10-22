@@ -1,4 +1,4 @@
-//! Modify menu depth (M2): PEDIT, LENGTHEN, ALIGN, BLEND, REVERSE, SPLINEDIT, NCOPY, CHSPACE,
+//! Modify menu depth (M2): PEDIT, LENGTHEN, ALIGN, BLEND, REVERSE, SPLINEDIT, NCOPY, MOCORO, CHSPACE,
 //! FLATTEN, plus the fillet/trim/extend extensions used by modify.rs (arcs, polylines,
 //! ellipses and splines).
 
@@ -17,7 +17,8 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 mod curve_edits;
 mod fillet_pline;
-pub(crate) use curve_edits::join_curves;
+mod mocoro;
+pub(crate) use curve_edits::{closed_kind, join_close, join_curves};
 pub(crate) use fillet_pline::{ChamferDistances, fillet_pline};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -62,6 +63,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Copy Nested Objects"])
             .params("{handle (block reference), pick?: [x,y] (nearest nested object; default all), delta? | from,to}")
             .interactive(|_| Ok(Box::new(NcopyM::default()))),
+        CommandSpec::new("mocoro", "Move/Copy/Rotate", mocoro::run_mocoro)
+            .menu(&["Tools", "Express Tools", "Move/Copy/Rotate"])
+            .params("{handles?, base: [x,y], ops: [{move: [x,y]} | {copy: [x,y]} | {rotate: degrees} | {scale: factor} | {base: [x,y]}]} → {handles (copies)}")
+            .interactive(|_| Ok(Box::new(mocoro::MocoroM::default()))),
         CommandSpec::new("chspace", "Change Space", run_chspace)
             .menu(&["Modify", "Change Space"])
             .params("{handles?, to?: \"model\" | layout name, viewport?: handle}")
@@ -762,7 +767,13 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
                 return Err(too_short());
             }
             let ne = fixed + dir * nl;
-            Ok(if at_b { line(a, ne) } else { line(ne, b) })
+            let mut out = l.clone();
+            if at_b {
+                out.b = ne.to3(l.b.z);
+            } else {
+                out.a = ne.to3(l.a.z);
+            }
+            Ok(EntityKind::Line(out))
         }
         EntityKind::Arc(ar) => {
             let g = Arc::new(ar.center.xy(), ar.radius, ar.start, ar.end);
@@ -783,7 +794,8 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
             if !(ns > 1e-12 && ns < TAU - 1e-9) {
                 return Err(other("The new arc would be zero length or a full circle."));
             }
-            Ok(if at_end { arc(&Arc::new(g.center, g.radius, g.start, g.start + ns)) } else { arc(&Arc::new(g.center, g.radius, g.end - ns, g.end)) })
+            let na = if at_end { Arc::new(g.center, g.radius, g.start, g.start + ns) } else { Arc::new(g.center, g.radius, g.end - ns, g.end) };
+            Ok(EntityKind::Arc(cadcraft_doc::Arc { radius: na.radius, start: na.start, end: na.end, ..ar.clone() }))
         }
         EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() >= 2 => {
             let total = Polyline { vertices: p.vertices.clone(), closed: false }.len();
@@ -1689,7 +1701,10 @@ fn trim_for_fillet(k: &EntityKind, pick: Vec2, t: Vec2) -> Option<(Option<Entity
             let keep = if (a - t).dot(pick - t) >= (b - t).dot(pick - t) { a } else { b };
             let dir = (t - keep).normalized();
             if dir == Vec2::ZERO {
-                return Some((None, None));
+                // The tangent point is already an endpoint. The unchanged line still has an
+                // arrival direction, which decides whether the fillet would meet it at a cusp.
+                let other = if keep == a { b } else { a };
+                return Some((None, Some((t - other).normalized())));
             }
             Some((Some(if keep == a { line(a, t) } else { line(t, b) }), Some(dir)))
         }
@@ -1746,9 +1761,7 @@ fn fillet_circle(k1: &EntityKind, p1: Vec2, o1: TanObj, k2: &EntityKind, p2: Vec
             return Some((*c, p1, p2));
         }
     }
-    // No circle suits the picked sides: keep an object's other side where that runs on smoothly.
-    let c = *cands.first()?;
-    let (t1, t2, v1, v2) = dirs(&c);
+    // No circle suits the picked sides: try keeping each object's other side.
     let ends = |k: &EntityKind| match k {
         EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
         EntityKind::Arc(a) => {
@@ -1757,8 +1770,14 @@ fn fillet_circle(k1: &EntityKind, p1: Vec2, o1: TanObj, k2: &EntityKind, p2: Vec
         }
         _ => Vec::new(),
     };
-    let side = |k: &EntityKind, p: Vec2, t: Vec2, v: Vec2| std::iter::once(p).chain(ends(k)).find(|q| runs_on(k, *q, t, v)).unwrap_or(p);
-    Some((c, side(k1, p1, t1, v1), side(k2, p2, t2, v2)))
+    let side = |k: &EntityKind, p: Vec2, t: Vec2, v: Vec2| std::iter::once(p).chain(ends(k)).find(|q| runs_on(k, *q, t, v));
+    for c in cands {
+        let (t1, t2, v1, v2) = dirs(&c);
+        if let (Some(q1), Some(q2)) = (side(k1, p1, t1, v1), side(k2, p2, t2, v2)) {
+            return Some((c, q1, q2));
+        }
+    }
+    None
 }
 
 /// Fillet two curves (lines, arcs, circles; elliptical arcs and splines in `curve_edits`) with
@@ -1795,7 +1814,7 @@ pub(crate) fn fillet_curves(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p
             .ok_or_else(|| other("The objects do not intersect."))?;
         (x, x, None, p1, p2)
     } else {
-        let (c, q1, q2) = fillet_circle(&e1.kind, p1, o1, &e2.kind, p2, o2, r).ok_or_else(|| other("Radius is too large."))?;
+        let (c, q1, q2) = fillet_circle(&e1.kind, p1, o1, &e2.kind, p2, o2, r).ok_or_else(|| other("No short tangent fillet fits these objects."))?;
         (o1.touch(&c), o2.touch(&c), Some(c), q1, q2)
     };
     let (n1, d1) = trim_for_fillet(&e1.kind, q1, t1).ok_or_else(unsupported)?;
