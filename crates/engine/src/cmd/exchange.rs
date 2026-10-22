@@ -324,6 +324,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         fill: true,
         lineweights,
         transparency,
+        plot_style_table: cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new),
         ..Default::default()
     };
     let list = cadcraft_render::build_plot(d, &space, &ropts);
