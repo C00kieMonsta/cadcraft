@@ -160,7 +160,7 @@ Total ≈ 90–140 h; items 1–6 parallelise across two or three agents.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-22 | trivial | FILLET checks alternate retained sides for every tangent circle and refuses pairs that cannot meet a short arc (#1559) |
+| 2026-10-22 | trivial | FILLET checks alternate retained sides for every tangent circle, preserves arrival directions at unchanged line and arc endpoints, and refuses pairs that cannot meet a short arc (#1559) |
 | 2026-10-18 | trivial | FILLET with a circle: the circle stays whole, the fillet arc no longer loops round or meets the line at a cusp, and a negative radius is refused (#1559) |
 | 2026-10-14 | trivial | JOIN Close: a single arc becomes its circle, a single elliptical arc its full ellipse (#1175) |
 | 2026-10-12 | trivial | TRIM on a closed polyline keeps only the complementary run when the pick lies past the last cut (#726) |

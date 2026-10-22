@@ -1727,7 +1727,7 @@ fn trim_for_fillet(k: &EntityKind, pick: Vec2, t: Vec2) -> Option<(Option<Entity
             };
             // Nothing left on the kept side: leave the arc alone rather than make a full circle.
             if na.sweep() > TAU - 1e-9 {
-                return Some((None, None));
+                return Some((None, Some(-dir)));
             }
             Some((Some(arc(&na)), Some(dir)))
         }

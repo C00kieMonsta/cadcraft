@@ -250,6 +250,33 @@ fn fillet_refuses_a_short_line_that_cannot_meet_the_short_arc() {
     }
 }
 
+/// An unchanged arc still has an arrival direction at each endpoint.
+#[test]
+fn fillet_preserves_arrival_direction_at_an_unchanged_arc_endpoint() {
+    let angle = 4.0_f64.atan2(3.0).to_degrees();
+    for (start, end, pick, line_pick) in [
+        (-angle, 0.0, [3.0, -4.0], [11.0, -15.0]),
+        // Pick just beyond the end so the requested retained side has zero length.
+        (0.0, angle, [3.0, 4.01], [11.0, 15.0]),
+    ] {
+        for arc_first in [true, false] {
+            let mut s = Session::new();
+            let a = h(&s.execute("arc", &json!({"center": [0, 0], "radius": 5, "start": start, "end": end})).unwrap());
+            let l = h(&s.execute("line", &json!({"points": [[11, -20], [11, 20]]})).unwrap());
+            let before = model(&s);
+            let params = if arc_first {
+                json!({"h1": a, "p1": pick, "h2": l, "p2": line_pick, "radius": 5})
+            } else {
+                json!({"h1": l, "p1": line_pick, "h2": a, "p2": pick, "radius": 5})
+            };
+            // The nearby candidate touches an arc endpoint but would leave a cusp there.
+            // The other candidate cannot extend the arc smoothly, so neither is usable.
+            assert!(s.execute("fillet", &params).is_err());
+            assert_eq!(model(&s), before);
+        }
+    }
+}
+
 /// Fillets with arcs and circles picked between the two possible tangent points: never a loop.
 #[test]
 fn fillet_arcs_and_circles_run_on_smoothly() {
