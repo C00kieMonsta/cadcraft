@@ -280,7 +280,7 @@ See [ROADMAP.md](ROADMAP.md) for the stage, measured parity and the estimate of 
 **Download CADCraft** from GitHub: the [latest release](https://github.com/storytold/cadcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/cadcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
 > [!WARNING]
-> CADCraft is published only here, at [github.com/storytold/cadcraft](https://github.com/storytold/cadcraft), and on [getartcraft.com](https://getartcraft.com/apps/cadcraft). Other repositories and sites that offer CADCraft downloads are not ours. One copycat repository, `cadcraft-app/cadcraft`, shipped an installer that contained malware ([#1554](https://github.com/storytold/cadcraft/issues/1554)). Before you run a download, check that its checksum matches the line for that file in the release's `SHA256SUMS.txt`:
+> Download official CADCraft builds from the [storytold/cadcraft releases](https://github.com/storytold/cadcraft/releases). Verify that the repository owner is `storytold`. Before you run a download, check that its checksum matches the line for that file in the release's `SHA256SUMS.txt`:
 >
 > ```sh
 > shasum -a 256 cadcraft-<ver>-macos-universal.dmg     # macOS (on Linux: sha256sum FILE)
