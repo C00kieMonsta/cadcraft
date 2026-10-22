@@ -199,6 +199,30 @@ fn explode_keeps_level_and_row_elevations() {
 }
 
 #[test]
+fn explode_array_composes_nonuniform_z_scale() {
+    let mut s = Session::new();
+    let source = s.execute("3dpoly", &json!({"points": [[0, 0, 1], [1, 0, 2]]})).unwrap()["handle"].clone();
+    let array =
+        s.execute("arrayrect", &json!({"handles": [source], "rows": 1, "cols": 1, "levels": 2, "levelSpacing": 5})).unwrap()["handle"].clone();
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(Handle::parse_hex(array.as_str().unwrap()).unwrap(), |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.insert.z = 7.0;
+                i.scale = cadcraft_engine::geom::Vec3::new(2.0, 2.0, 3.0);
+            }
+        })
+        .unwrap();
+    s.execute("explode", &json!({"handles": [array]})).unwrap();
+    let mut elevations: Vec<_> = model(&s)
+        .iter()
+        .filter_map(|e| if let EntityKind::Polyline3d(p) = &e.kind { Some(p.points.iter().map(|p| p.z).collect::<Vec<_>>()) } else { None })
+        .collect();
+    elevations.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(elevations, vec![vec![10.0, 13.0], vec![25.0, 28.0]]);
+}
+
+#[test]
 fn arrays_of_arrays_and_limits() {
     // An array of an array: exploding the outer one gives the inner arrays.
     let mut s = Session::new();

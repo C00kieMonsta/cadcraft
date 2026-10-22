@@ -215,6 +215,39 @@ fn lengthen_json() {
 }
 
 #[test]
+fn lengthen_keeps_elevation() {
+    let mut s = Session::new();
+    let l = h(&s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap());
+    let a = h(&s.execute("arc", &json!({"center": [0, 0], "radius": 1, "start": 0, "end": 90})).unwrap());
+    let doc = s.doc_mut().unwrap();
+    doc.modify_entity(Handle::parse_hex(&l).unwrap(), |e| {
+        if let EntityKind::Line(x) = &mut e.kind {
+            x.a.z = 5.0;
+            x.b.z = 5.0;
+        }
+    })
+    .unwrap();
+    doc.modify_entity(Handle::parse_hex(&a).unwrap(), |e| {
+        if let EntityKind::Arc(x) = &mut e.kind {
+            x.center.z = 3.0;
+        }
+    })
+    .unwrap();
+    s.execute("lengthen", &json!({"handle": l, "delta": 2})).unwrap();
+    let EntityKind::Line(x) = kind(&s, &l) else { panic!("not a line") };
+    assert_eq!((x.a.x, x.a.y, x.a.z), (0.0, 0.0, 5.0));
+    assert_eq!((x.b.x, x.b.y, x.b.z), (12.0, 0.0, 5.0));
+    s.execute("lengthen", &json!({"handle": l, "delta": 1, "pick": [0, 0]})).unwrap();
+    let EntityKind::Line(x) = kind(&s, &l) else { panic!("not a line") };
+    assert_eq!((x.a.x, x.a.y, x.a.z), (-1.0, 0.0, 5.0));
+    assert_eq!((x.b.x, x.b.y, x.b.z), (12.0, 0.0, 5.0));
+    s.execute("lengthen", &json!({"handle": a, "deltaAngle": 10})).unwrap();
+    let EntityKind::Arc(x) = kind(&s, &a) else { panic!("not an arc") };
+    assert_eq!(x.center.z, 3.0);
+    assert!((arc_of(&kind(&s, &a)).sweep() - 100f64.to_radians()).abs() < 1e-9);
+}
+
+#[test]
 fn lengthen_command_line() {
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
@@ -675,6 +708,48 @@ fn explode_insert_keeps_elevations() {
     assert_eq!(zs, vec![(5.0, 7.0)]);
 }
 
+/// Nested references keep the parent's Z scale even when its XY scale differs.
+#[test]
+fn explode_nested_insert_composes_z_scales_independently_of_xy() {
+    use cadcraft_geom::Vec3;
+
+    for (xy, sz) in [(2.0, 3.0), (2.0, -3.0), (0.0, 3.0)] {
+        let mut s = Session::new();
+        let p = h(&s.execute("3dpoly", &json!({"points": [[0, 0, 2], [1, 0, 4]]})).unwrap());
+        s.execute("block", &json!({"name": "Inner", "base": [0, 0], "handles": [p], "keep": "delete"})).unwrap();
+        let inner = h(&s.execute("insert", &json!({"name": "Inner", "at": [0, 0]})).unwrap());
+        s.doc_mut()
+            .unwrap()
+            .modify_entity(Handle::parse_hex(&inner).unwrap(), |e| {
+                if let EntityKind::Insert(i) = &mut e.kind {
+                    i.insert.z = 5.0;
+                    i.scale.z = 4.0;
+                }
+            })
+            .unwrap();
+        s.execute("block", &json!({"name": "Outer", "base": [0, 0], "handles": [inner], "keep": "delete"})).unwrap();
+        let outer = h(&s.execute("insert", &json!({"name": "Outer", "at": [0, 0]})).unwrap());
+        s.doc_mut()
+            .unwrap()
+            .modify_entity(Handle::parse_hex(&outer).unwrap(), |e| {
+                if let EntityKind::Insert(i) = &mut e.kind {
+                    i.insert.z = 7.0;
+                    i.scale = Vec3::new(xy, xy, sz);
+                }
+            })
+            .unwrap();
+
+        s.execute("explode", &json!({"handles": [outer]})).unwrap();
+        let nested = s.doc().unwrap().model.iter().next().unwrap().clone();
+        let EntityKind::Insert(i) = &nested.kind else { panic!("expected the inner reference") };
+        assert_eq!(i.insert.z, 7.0 + sz * 5.0);
+        assert_eq!(i.scale.z, sz * 4.0, "XY scale {xy}, Z scale {sz}");
+        s.execute("explode", &json!({"handles": [nested.handle.hex()]})).unwrap();
+        let EntityKind::Polyline3d(p) = last(&s) else { panic!("expected the source polyline") };
+        assert_eq!(p.points.iter().map(|p| p.z).collect::<Vec<_>>(), vec![7.0 + sz * 13.0, 7.0 + sz * 21.0]);
+    }
+}
+
 /// Snapshot of every model entity, to prove a command left the drawing untouched.
 fn model_dump(s: &Session) -> String {
     format!("{:?}", s.doc().unwrap().model.iter().map(|e| e.kind.clone()).collect::<Vec<_>>())
@@ -751,4 +826,19 @@ fn offset_polyline_arc_bulge_follows_joined_endpoints() {
     assert!(ccw);
     assert!(near(arc.center, 10.0, 5.0), "arc centre drifted to {:?}", arc.center);
     assert!((arc.radius - 4.0).abs() < 1e-6, "radius {}", arc.radius);
+}
+
+#[test]
+fn offset_elliptical_arc_follows_picked_side() {
+    let max_x = |side: Value| {
+        let mut s = Session::new();
+        let e = h(&s.execute("ellipse", &json!({"center": [0, 0], "major": [10, 0], "ratio": 0.5, "start": 0, "end": 90})).unwrap());
+        s.execute("offset", &json!({"handle": e, "distance": 1, "side": side})).unwrap();
+        let p = poly(&last(&s));
+        p.vertices.iter().map(|v| v.p.x).fold(f64::MIN, f64::max)
+    };
+    let centre = max_x(json!([0, 0]));
+    assert!((centre - 9.0).abs() < 0.05, "centre side went outward: max x = {centre}");
+    let outer = max_x(json!([20, 20]));
+    assert!((outer - 11.0).abs() < 0.05, "outer side went inward: max x = {outer}");
 }

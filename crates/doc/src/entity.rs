@@ -1388,11 +1388,34 @@ impl EntityKind {
         }
     }
 
-    /// Move the elevation of every point: z becomes `offset + scale * z`. This is the Z part of
-    /// a block reference's placement, applied after [`transform`](Self::transform), which is
-    /// planar and leaves Z alone (it does carry its uniform factor into a nested reference's Z
-    /// scale, so that is not scaled again here). A scale or offset that is not finite changes
-    /// nothing.
+    /// Apply a planar transform and an independent Z transform for a block's placement.
+    /// Planar editing also scales helix heights and nested references' Z scales. Restore those
+    /// values before applying the reference's own Z scale, which can differ from its XY scale.
+    pub fn transform_with_z(&mut self, m: &Mat3, scale: f64, offset: f64) {
+        let length = match self {
+            EntityKind::Insert(i) => Some(i.scale.z),
+            EntityKind::MLeader(ml) => ml.block.as_ref().map(|b| b.scale.z),
+            EntityKind::Helix(h) => Some(h.height),
+            _ => None,
+        };
+        self.transform(m);
+        if let Some(length) = length {
+            match self {
+                EntityKind::Insert(i) => i.scale.z = length,
+                EntityKind::MLeader(ml) => {
+                    if let Some(b) = &mut ml.block {
+                        b.scale.z = length;
+                    }
+                }
+                EntityKind::Helix(h) => h.height = length,
+                _ => {}
+            }
+        }
+        self.transform_z(scale, offset);
+    }
+
+    /// Move point elevations by `offset + scale * z` and scale vertical lengths, including
+    /// nested references' Z scales. A scale or offset that is not finite changes nothing.
     pub fn transform_z(&mut self, scale: f64, offset: f64) {
         if !scale.is_finite() || !offset.is_finite() {
             return;
@@ -1421,13 +1444,17 @@ impl EntityKind {
             EntityKind::Ellipse(e) => z(&mut e.center),
             EntityKind::LwPolyline(p) => p.elevation = offset + scale * p.elevation,
             EntityKind::Polyline3d(p) => p.points.iter_mut().for_each(z),
-            EntityKind::Helix(h) => z(&mut h.center),
+            EntityKind::Helix(h) => {
+                z(&mut h.center);
+                h.height *= scale;
+            }
             EntityKind::Ray(r) | EntityKind::XLine(r) => z(&mut r.base),
             EntityKind::Text(t) => text(t),
             EntityKind::AttDef(a) => attrib(a),
             EntityKind::MText(t) => z(&mut t.insert),
             EntityKind::Insert(i) => {
                 z(&mut i.insert);
+                i.scale.z *= scale;
                 i.attribs.iter_mut().for_each(attrib);
             }
             EntityKind::Dimension(d) => {
@@ -1448,6 +1475,8 @@ impl EntityKind {
                 }
                 if let Some(b) = &mut ml.block {
                     z(&mut b.insert);
+                    b.scale.z *= scale;
+                    b.attribs.iter_mut().for_each(attrib);
                 }
             }
             EntityKind::Hatch(h) => h.elevation = offset + scale * h.elevation,

@@ -6,6 +6,29 @@ fn line(a: (f64, f64), b: (f64, f64)) -> EntityKind {
 }
 
 #[test]
+fn block_transform_keeps_helix_height_independent_of_xy_scale() {
+    for (xy, sz) in [(2.0, 3.0), (2.0, -3.0), (0.0, 3.0)] {
+        let helix = Helix {
+            center: Vec3::new(1.0, 2.0, 5.0),
+            base_radius: 2.0,
+            top_radius: 1.0,
+            height: 4.0,
+            turns: 2.0,
+            start_angle: 0.0,
+            ccw: true,
+            constrain: HelixConstrain::Height,
+        };
+        let mut kind = EntityKind::Helix(helix);
+        kind.transform_with_z(&Mat3::scale(xy, xy), sz, 7.0);
+        let EntityKind::Helix(h) = kind else { panic!("expected a helix") };
+        assert_eq!(h.center, Vec3::new(xy, 2.0 * xy, 7.0 + sz * 5.0));
+        assert_eq!(h.height, sz * 4.0);
+        assert_eq!(h.end_point().z, 7.0 + sz * 9.0);
+        assert_eq!(h.base_radius, xy * 2.0);
+    }
+}
+
+#[test]
 fn new_drawing_has_standard_tables() {
     let d = Drawing::new_imperial();
     assert!(d.layer("0").is_some());
@@ -14,6 +37,23 @@ fn new_drawing_has_standard_tables() {
     assert_eq!(d.header.f64("TEXTSIZE", 0.0), 0.2);
     let m = Drawing::new_metric();
     assert!(m.dim_style("ISO-25").is_some());
+}
+
+#[test]
+fn new_metric_drawing_has_metric_multileader_and_table_styles() {
+    let m = Drawing::new_metric();
+    let iso = m.dim_style("ISO-25").unwrap();
+    let ml = m.mleader_styles.iter().find(|s| s.name == "Standard").unwrap();
+    assert_eq!((ml.text_height, ml.arrow_size), (iso.text_height, iso.arrow_size));
+    assert_eq!(ml.dogleg, 5.0);
+    let ts = m.table_styles.iter().find(|s| s.name == "Standard").unwrap();
+    assert_eq!(ts.text_height, iso.text_height);
+    assert_eq!(iso.text_height, 2.5);
+
+    let i = Drawing::new_imperial();
+    assert_eq!(i.mleader_styles, vec![MLeaderStyle::default()]);
+    assert_eq!(i.table_styles, vec![TableStyle::default()]);
+    assert_eq!((i.mleader_styles[0].text_height, i.table_styles[0].text_height), (0.18, 0.18));
 }
 
 #[test]
