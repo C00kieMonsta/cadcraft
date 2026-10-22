@@ -643,7 +643,7 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
     let name = match str_param(p, "layout") {
         Some(n) if n.eq_ignore_ascii_case("model") => None,
         Some(n) => Some(layout_name(cmd, s.doc()?, n)?),
-        None => s.space().layout().map(str::to_string),
+        None => s.layout_space().layout().map(str::to_string),
     };
     if name.is_none() && str_param(p, "layout").is_none() && !changes {
         // Report every page setup.
@@ -1075,6 +1075,33 @@ mod tests {
         s.execute("pagesetup", &json!({"layout": "Layout2", "width": 500, "height": 300})).unwrap();
         let p = &s.doc().unwrap().layout("Layout2").unwrap().page;
         assert_eq!((p.width_mm, p.height_mm), (300.0, 500.0));
+    }
+
+    #[test]
+    fn pagesetup_targets_the_layout_tab_while_in_mspace() {
+        let mut s = session_with_model();
+        s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+        s.execute("mview", &json!({"p1": [1, 1], "p2": [5, 4]})).unwrap();
+        s.execute("mspace", &json!({})).unwrap();
+        assert_eq!(s.space(), Space::Model);
+        assert_eq!(s.layout_space(), Space::Paper("Layout1".into()));
+        let before = s.doc().unwrap().layout("Layout1").unwrap().page.clone();
+        let other = s.doc().unwrap().layout("Layout2").unwrap().page.clone();
+
+        let report = s.execute("pagesetup", &json!({})).unwrap();
+        assert_eq!(report["layout"], "Layout1");
+        let changed = s.execute("pagesetup", &json!({"paper": "A3"})).unwrap();
+        assert_eq!(changed["layout"], "Layout1");
+        assert_eq!(s.doc().unwrap().layout("Layout1").unwrap().page.width_mm, 297.0);
+        assert_eq!(s.doc().unwrap().layout("Layout2").unwrap().page, other);
+        assert_eq!(s.doc().unwrap().model_page, None);
+
+        s.undo().unwrap();
+        assert_eq!(s.doc().unwrap().layout("Layout1").unwrap().page, before);
+        assert_eq!(s.doc().unwrap().model_page, None);
+        s.execute("pagesetup", &json!({"layout": "Model", "paper": "A3"})).unwrap();
+        assert_eq!(s.doc().unwrap().model_page.as_ref().unwrap().width_mm, 297.0);
+        assert_eq!(s.doc().unwrap().layout("Layout1").unwrap().page, before);
     }
 
     #[test]

@@ -1010,7 +1010,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            // A page setup has no place for a plot window's corners.
+            // Applying a model plot window is not supported yet.
             let keepable = !model || st.page.plot_area != "window";
             if ui
                 .add_enabled(keepable, egui::Button::new("Apply to Layout"))

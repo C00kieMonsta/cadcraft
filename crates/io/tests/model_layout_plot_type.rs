@@ -72,11 +72,13 @@ fn model_page() -> PageSetup {
     PageSetup {
         device: "DWG To PDF.pc3".into(),
         paper: "ISO A3 (297.00 x 420.00 MM)".into(),
+        paper_mm: true,
         width_mm: 297.0,
         height_mm: 420.0,
         margins_mm: [5.0, 6.0, 7.0, 8.0],
         landscape: false,
         plot_area: "display".into(),
+        plot_window: [0.0; 4],
         scale_to_fit: false,
         scale: 0.02,
         plot_style_table: "monochrome.ctb".into(),
@@ -96,8 +98,9 @@ fn model_page_setup_round_trips() {
     assert_eq!((model.1, model.2), (Some(0), Some(16)), "display, custom scale");
     let back = cadcraft_io::read_dxf(text.as_bytes()).unwrap();
     assert_eq!(back.model_page, Some(model_page()));
-    assert!(back.layouts.iter().all(|l| l.page == PageSetup::default()), "layouts keep their own");
-    // Limits too; a window has no corners to keep, so it plots the extents.
+    let default_layout = PageSetup { paper_mm: true, ..Default::default() };
+    assert!(back.layouts.iter().all(|l| l.page == default_layout), "layouts keep their own settings in metric paper units");
+    // Limits too; unsupported model plot areas use the extents.
     for (area, read) in [("limits", "limits"), ("window", "extents"), ("layout", "extents")] {
         d.model_page = Some(PageSetup { plot_area: area.into(), ..model_page() });
         let back = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap();
@@ -130,6 +133,13 @@ fn a_drawing_without_a_model_page_setup_reads_back_without_one() {
     let text = cadcraft_io::write_dxf(&drawing());
     assert_eq!(plots(&text).first().map(|p| p.0.as_str()), Some("Model"), "Model's LAYOUT comes first");
     assert_eq!(cadcraft_io::read_dxf(text.as_bytes()).unwrap().model_page, None);
+    // Both explicit millimetres and the units flag older versions wrote remain unset.
+    for units in ["0", "1"] {
+        let text = set_in_model_layout(&text, "72", units);
+        let back = cadcraft_io::read_dxf(text.as_bytes()).unwrap();
+        assert_eq!(back.model_page, None, "paper units {units}");
+        assert_eq!(cadcraft_render::paper::model_page(&back).width_mm, 210.0, "the metric default stays A4");
+    }
     // What older versions wrote for Model (the default page, plot type 5 at 1:1) reads the same.
     let older = set_in_model_layout(&set_in_model_layout(&text, "74", "5"), "75", "16");
     assert_eq!(plots(&older).first().map(|p| (p.1, p.2)), Some((Some(5), Some(16))));
@@ -141,6 +151,15 @@ fn a_drawing_without_a_model_page_setup_reads_back_without_one() {
     let other = set_in_model_layout(&set_in_model_layout(&text, "44", "nan"), "142", "-3");
     let page = cadcraft_io::read_dxf(set_in_model_layout(&other, "74", "0").as_bytes()).unwrap().model_page.unwrap();
     assert_eq!((page.plot_area.as_str(), page.width_mm, page.scale), ("display", PageSetup::default().width_mm, 1.0));
+}
+
+#[test]
+fn imperial_model_page_with_explicit_mm_units_is_preserved() {
+    let mut d = Drawing::new_imperial();
+    let page = PageSetup { paper_mm: true, plot_area: "extents".into(), scale_to_fit: true, ..Default::default() };
+    d.model_page = Some(page.clone());
+    let back = cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap();
+    assert_eq!(back.model_page, Some(page), "explicit metric paper units in an imperial drawing are a saved setup");
 }
 
 #[test]

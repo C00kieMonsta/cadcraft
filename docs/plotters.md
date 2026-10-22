@@ -119,7 +119,9 @@ Model space has a page setup of its own, as each layout has.
 
 - `pagesetup {layout: "Model", …}` (or `pagesetup` without `layout` on the Model tab) stores
   it, one undo step. It takes the layout options and a plot area of `extents`, `display` or
-  `limits`. A plot window can't be kept: a page setup has no place for its corners.
+  `limits`. Saving a model plot window through PAGESETUP or Apply to Layout is not available yet.
+- Without `layout`, PAGESETUP targets the displayed tab. Editing model space through a layout
+  viewport (MSPACE) still reads and updates that layout's page setup.
 - Until it is set, model space plots the drawing extents fitted and centred, on A4 in metric
   drawings and ANSI A otherwise.
 - PLOT, EXPORTPDF and PREVIEW take its device, paper, orientation, margins, plot style
